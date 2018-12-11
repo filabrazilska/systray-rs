@@ -1,6 +1,5 @@
 // Systray Lib
 
-#[macro_use]
 extern crate log;
 #[cfg(target_os = "windows")]
 extern crate winapi;
@@ -20,7 +19,8 @@ extern crate libappindicator;
 pub mod api;
 
 use std::collections::HashMap;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
+use std::time::Duration;
 
 #[derive(Clone, Debug)]
 pub enum SystrayError {
@@ -47,6 +47,7 @@ pub struct Application {
     window: api::api::Window,
     menu_idx: u32,
     callback: HashMap<u32, Callback>,
+    loop_callback: HashMap<i16, Callback>,
     // Each platform-specific window module will set up its own thread for
     // dealing with the OS main loop. Use this channel for receiving events from
     // that thread.
@@ -68,6 +69,7 @@ impl Application {
                 window: w,
                 menu_idx: 0,
                 callback: HashMap::new(),
+                loop_callback: HashMap::new(),
                 rx: event_rx
             }),
             Err(e) => Err(e)
@@ -94,6 +96,10 @@ impl Application {
         Ok(idx)
     }
 
+    pub fn set_loop_callback(&mut self, callback : Callback) -> () {
+        self.loop_callback.insert(0, callback);
+    }
+
     pub fn set_icon_from_file(&self, file: &String) -> Result<(), SystrayError> {
         self.window.set_icon_from_file(file)
     }
@@ -115,19 +121,27 @@ impl Application {
     }
 
     pub fn wait_for_message(&mut self) {
+        let duration = Duration::from_millis(1000);
         loop {
-            let msg;
-            match self.rx.recv() {
-                Ok(m) => msg = m,
+            match self.rx.recv_timeout(duration) {
+                Ok(msg) => {
+                    if self.callback.contains_key(&msg.menu_index) {
+                        let f = self.callback.remove(&msg.menu_index).unwrap();
+                        f(self);
+                        self.callback.insert(msg.menu_index, f);
+                    }
+                }
+                Err(e) if e == RecvTimeoutError::Timeout => {
+                }
                 Err(_) => {
                     self.quit();
                     break;
                 }
             }
-            if self.callback.contains_key(&msg.menu_index) {
-                let f = self.callback.remove(&msg.menu_index).unwrap();
+            if self.loop_callback.contains_key(&0) {
+                let f = self.loop_callback.remove(&0).unwrap();
                 f(self);
-                self.callback.insert(msg.menu_index, f);
+                self.loop_callback.insert(0, f);
             }
         }
     }
